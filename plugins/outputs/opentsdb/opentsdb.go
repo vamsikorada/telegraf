@@ -114,7 +114,7 @@ func (o *OpenTSDB) WriteHttp(metrics []telegraf.Metric, u *url.URL) error {
 		now := m.UnixNano() / 1000000000
 		tags := cleanTags(m.Tags())
 
-		for fieldName, value := range m.Fields() {
+		for _, value := range m.Fields() {
 			switch value.(type) {
 			case int64:
 			case uint64:
@@ -125,8 +125,7 @@ func (o *OpenTSDB) WriteHttp(metrics []telegraf.Metric, u *url.URL) error {
 			}
 
 			metric := &HttpMetric{
-				Metric: sanitizedChars.Replace(fmt.Sprintf("%s%s_%s",
-					o.Prefix, m.Name(), fieldName)),
+				Metric: sanitizedChars.Replace(m.Name()),
 				Tags:      tags,
 				Timestamp: now,
 				Value:     value,
@@ -159,7 +158,7 @@ func (o *OpenTSDB) WriteTelnet(metrics []telegraf.Metric, u *url.URL) error {
 		now := m.UnixNano() / 1000000000
 		tags := ToLineFormat(cleanTags(m.Tags()))
 
-		for fieldName, value := range m.Fields() {
+		for _, value := range m.Fields() {
 			switch value.(type) {
 			case int64:
 			case uint64:
@@ -175,8 +174,7 @@ func (o *OpenTSDB) WriteTelnet(metrics []telegraf.Metric, u *url.URL) error {
 				continue
 			}
 
-			messageLine := fmt.Sprintf("put %s %v %s %s\n",
-				sanitizedChars.Replace(fmt.Sprintf("%s%s_%s", o.Prefix, m.Name(), fieldName)),
+			messageLine := fmt.Sprintf("put %s %v %s %s\n", sanitizedChars.Replace(m.Name()),
 				now, metricValue, tags)
 
 			_, err := connection.Write([]byte(messageLine))

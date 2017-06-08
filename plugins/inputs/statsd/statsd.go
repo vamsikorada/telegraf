@@ -15,6 +15,8 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
+
+	"github.com/spf13/viper"
 )
 
 const (
@@ -113,6 +115,7 @@ type cachedgauge struct {
 	name   string
 	fields map[string]interface{}
 	tags   map[string]string
+	counts map[string]int
 }
 
 type cachedcounter struct {
@@ -238,6 +241,15 @@ func (s *Statsd) Gather(acc telegraf.Accumulator) error {
 }
 
 func (s *Statsd) Start(_ telegraf.Accumulator) error {
+	// Read aggregation peoperties
+	viper.SetConfigName("aggregation")
+	viper.AddConfigPath(".")
+	err := viper.ReadInConfig()
+
+	if err != nil {
+		fmt.Println("No configuration file loaded - using defaults")
+	}
+
 	// Make data structures
 	s.done = make(chan struct{})
 	s.in = make(chan []byte, s.AllowedPendingMessages)
@@ -290,14 +302,14 @@ func (s *Statsd) udpListen() error {
 			bufCopy := make([]byte, n)
 			copy(bufCopy, buf[:n])
 
-			select {
-			case s.in <- bufCopy:
-			default:
-				s.drops++
-				if s.drops == 1 || s.AllowedPendingMessages == 0 || s.drops%s.AllowedPendingMessages == 0 {
-					log.Printf(dropwarn, s.drops)
+				select {
+				case s.in <- bufCopy:
+				default:
+					s.drops++
+					if s.drops == 1 || s.AllowedPendingMessages == 0 || s.drops%s.AllowedPendingMessages == 0 {
+						log.Printf(dropwarn, s.drops)
+					}
 				}
-			}
 		}
 	}
 }
@@ -457,7 +469,7 @@ func (s *Statsd) parseStatsdLine(line string) error {
 		case "c":
 			m.tags["metric_type"] = "counter"
 		case "g":
-			m.tags["metric_type"] = "gauge"
+		//m.tags["metric_type"] = "gauge"
 		case "s":
 			m.tags["metric_type"] = "set"
 		case "ms":
@@ -604,18 +616,42 @@ func (s *Statsd) aggregate(m metric) {
 				name:   m.name,
 				fields: make(map[string]interface{}),
 				tags:   m.tags,
+				counts: make(map[string]int),
 			}
 		}
 		// check if the field exists
 		_, ok = s.gauges[m.hash].fields[m.field]
 		if !ok {
-			s.gauges[m.hash].fields[m.field] = float64(0)
-		}
-		if m.additive {
-			s.gauges[m.hash].fields[m.field] =
-				s.gauges[m.hash].fields[m.field].(float64) + m.floatvalue
+			s.gauges[m.hash].fields[m.field] = m.floatvalue //float64(0)
+			s.gauges[m.hash].counts[m.field] = 1
 		} else {
-			s.gauges[m.hash].fields[m.field] = m.floatvalue
+			s.gauges[m.hash].counts[m.field]++
+		}
+
+		var aggPolicy string
+		aggPolicy = viper.GetString(m.name)
+
+		if(s.gauges[m.hash].counts[m.field] > 1){
+			switch aggPolicy {
+			case "sum":
+				s.gauges[m.hash].fields[m.field] =
+					s.gauges[m.hash].fields[m.field].(float64) + m.floatvalue
+			case "max":
+				if(s.gauges[m.hash].fields[m.field].(float64) < m.floatvalue){
+					s.gauges[m.hash].fields[m.field] = m.floatvalue
+				}
+			case "min":
+				if(s.gauges[m.hash].fields[m.field].(float64) > m.floatvalue){
+					s.gauges[m.hash].fields[m.field] = m.floatvalue
+				}
+			case "avg":
+				var sum float64
+				sum = ((s.gauges[m.hash].fields[m.field].(float64))*(float64(s.gauges[m.hash].counts[m.field] - 1))) + m.floatvalue
+				s.gauges[m.hash].fields[m.field] = sum / float64(s.gauges[m.hash].counts[m.field])
+			default :
+				s.gauges[m.hash].fields[m.field] = m.floatvalue
+			}
+
 		}
 	case "s":
 		// check if the measurement exists
