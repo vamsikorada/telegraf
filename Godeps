@@ -48,6 +48,7 @@ github.com/samuel/go-zookeeper 1d7be4effb13d2d908342d349d71a284a7542693
 github.com/satori/go.uuid 5bf94b69c6b68ee1b541973bb8e1144db23a194b
 github.com/shirou/gopsutil 9a4a9167ad3b4355dbf1c2c7a0f5f0d3fb1e9ab9
 github.com/soniah/gosnmp 5ad50dc75ab389f8a1c9f8a67d3a1cd85f67ed15
+github.com/spf13/viper a1ecfa6a20bd4ef9e9caded262ee1b1b26847675
 github.com/streadway/amqp 63795daa9a446c920826655f26ba31c81c860fd6
 github.com/stretchr/testify 4d4bfba8f1d1027c4fdbe371823030df51419987
 github.com/vjeantet/grok d73e972b60935c7fec0b4ffbc904ed39ecaf7efe

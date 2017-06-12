@@ -204,3 +204,22 @@ mem.cached.localhost:256|g
 
 There are many more options available,
 [More details can be found here](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md#graphite)
+
+
+
+### Custom changes
+
+Added new metric type 'm' which will send the metrics as per the aggregation policies defined in the file aggregation.json which should be present in the same folder as .telegraf
+Also this new metric type will not add the tag metric_type to the metrics
+
+Here is a sample aggregation.json file
+
+```
+{
+"metric1":"avg"
+"metric2":"min"
+"metric3":"max"
+"metric4":"sum"
+}
+
+```

@@ -51,6 +51,7 @@ type Statsd struct {
 	DeleteCounters bool
 	DeleteSets     bool
 	DeleteTimings  bool
+	DeleteMetrics  bool
 	ConvertNames   bool
 
 	// MetricSeparator is the separator between parts of the metric name.
@@ -81,6 +82,7 @@ type Statsd struct {
 	counters map[string]cachedcounter
 	sets     map[string]cachedset
 	timings  map[string]cachedtimings
+	metrics  map[string]cachedmetric
 
 	// bucket -> influx templates
 	Templates []string
@@ -112,6 +114,12 @@ type cachedset struct {
 }
 
 type cachedgauge struct {
+	name   string
+	fields map[string]interface{}
+	tags   map[string]string
+}
+
+type cachedmetric struct {
 	name   string
 	fields map[string]interface{}
 	tags   map[string]string
@@ -219,6 +227,13 @@ func (s *Statsd) Gather(acc telegraf.Accumulator) error {
 		s.gauges = make(map[string]cachedgauge)
 	}
 
+	for _, metric := range s.metrics {
+		acc.AddFields(metric.name, metric.fields, metric.tags, now)
+	}
+	if s.DeleteMetrics {
+		s.metrics = make(map[string]cachedmetric)
+	}
+
 	for _, metric := range s.counters {
 		acc.AddFields(metric.name, metric.fields, metric.tags, now)
 	}
@@ -255,6 +270,7 @@ func (s *Statsd) Start(_ telegraf.Accumulator) error {
 	s.in = make(chan []byte, s.AllowedPendingMessages)
 
 	s.gauges = make(map[string]cachedgauge)
+	s.metrics = make(map[string]cachedmetric)
 	s.counters = make(map[string]cachedcounter)
 	s.sets = make(map[string]cachedset)
 	s.timings = make(map[string]cachedtimings)
@@ -419,7 +435,7 @@ func (s *Statsd) parseStatsdLine(line string) error {
 
 		// Validate metric type
 		switch pipesplit[1] {
-		case "g", "c", "s", "ms", "h":
+		case "g", "c", "s", "ms", "h", "m":
 			m.mtype = pipesplit[1]
 		default:
 			log.Printf("E! Error: Statsd Metric type %s unsupported", pipesplit[1])
@@ -428,7 +444,7 @@ func (s *Statsd) parseStatsdLine(line string) error {
 
 		// Parse the value
 		if strings.HasPrefix(pipesplit[0], "-") || strings.HasPrefix(pipesplit[0], "+") {
-			if m.mtype != "g" && m.mtype != "c" {
+			if m.mtype != "g" && m.mtype != "c" && m.mtype != "m"{
 				log.Printf("E! Error: +- values are only supported for gauges & counters: %s\n", line)
 				return errors.New("Error Parsing statsd line")
 			}
@@ -436,7 +452,7 @@ func (s *Statsd) parseStatsdLine(line string) error {
 		}
 
 		switch m.mtype {
-		case "g", "ms", "h":
+		case "g", "ms", "h", "m":
 			v, err := strconv.ParseFloat(pipesplit[0], 64)
 			if err != nil {
 				log.Printf("E! Error: parsing value to float64: %s\n", line)
@@ -469,7 +485,7 @@ func (s *Statsd) parseStatsdLine(line string) error {
 		case "c":
 			m.tags["metric_type"] = "counter"
 		case "g":
-		//m.tags["metric_type"] = "gauge"
+			m.tags["metric_type"] = "gauge"
 		case "s":
 			m.tags["metric_type"] = "set"
 		case "ms":
@@ -608,6 +624,7 @@ func (s *Statsd) aggregate(m metric) {
 		}
 		s.counters[m.hash].fields[m.field] =
 			s.counters[m.hash].fields[m.field].(int64) + m.intvalue
+
 	case "g":
 		// check if the measurement exists
 		_, ok := s.gauges[m.hash]
@@ -616,40 +633,61 @@ func (s *Statsd) aggregate(m metric) {
 				name:   m.name,
 				fields: make(map[string]interface{}),
 				tags:   m.tags,
-				counts: make(map[string]int),
 			}
 		}
 		// check if the field exists
 		_, ok = s.gauges[m.hash].fields[m.field]
 		if !ok {
-			s.gauges[m.hash].fields[m.field] = m.floatvalue //float64(0)
-			s.gauges[m.hash].counts[m.field] = 1
+			s.gauges[m.hash].fields[m.field] = float64(0)
+		}
+		if m.additive {
+			s.gauges[m.hash].fields[m.field] =
+				s.gauges[m.hash].fields[m.field].(float64) + m.floatvalue
 		} else {
-			s.gauges[m.hash].counts[m.field]++
+			s.gauges[m.hash].fields[m.field] = m.floatvalue
+		}
+	case "m":
+		// check if the measurement exists
+		_, ok := s.metrics[m.hash]
+		if !ok {
+			s.metrics[m.hash] = cachedmetric{
+				name:   m.name,
+				fields: make(map[string]interface{}),
+				tags:   m.tags,
+				counts: make(map[string]int),
+			}
+		}
+		// check if the field exists
+		_, ok = s.metrics[m.hash].fields[m.field]
+		if !ok {
+			s.metrics[m.hash].fields[m.field] = m.floatvalue
+			s.metrics[m.hash].counts[m.field] = 1
+		} else {
+			s.metrics[m.hash].counts[m.field]++
 		}
 
 		var aggPolicy string
 		aggPolicy = viper.GetString(m.name)
 
-		if(s.gauges[m.hash].counts[m.field] > 1){
+		if(s.metrics[m.hash].counts[m.field] > 1){
 			switch aggPolicy {
 			case "sum":
-				s.gauges[m.hash].fields[m.field] =
-					s.gauges[m.hash].fields[m.field].(float64) + m.floatvalue
+				s.metrics[m.hash].fields[m.field] =
+					s.metrics[m.hash].fields[m.field].(float64) + m.floatvalue
 			case "max":
-				if(s.gauges[m.hash].fields[m.field].(float64) < m.floatvalue){
-					s.gauges[m.hash].fields[m.field] = m.floatvalue
+				if(s.metrics[m.hash].fields[m.field].(float64) < m.floatvalue){
+					s.metrics[m.hash].fields[m.field] = m.floatvalue
 				}
 			case "min":
-				if(s.gauges[m.hash].fields[m.field].(float64) > m.floatvalue){
-					s.gauges[m.hash].fields[m.field] = m.floatvalue
+				if(s.metrics[m.hash].fields[m.field].(float64) > m.floatvalue){
+					s.metrics[m.hash].fields[m.field] = m.floatvalue
 				}
 			case "avg":
 				var sum float64
-				sum = ((s.gauges[m.hash].fields[m.field].(float64))*(float64(s.gauges[m.hash].counts[m.field] - 1))) + m.floatvalue
-				s.gauges[m.hash].fields[m.field] = sum / float64(s.gauges[m.hash].counts[m.field])
+				sum = ((s.metrics[m.hash].fields[m.field].(float64))*(float64(s.metrics[m.hash].counts[m.field] - 1))) + m.floatvalue
+				s.metrics[m.hash].fields[m.field] = sum / float64(s.metrics[m.hash].counts[m.field])
 			default :
-				s.gauges[m.hash].fields[m.field] = m.floatvalue
+				s.metrics[m.hash].fields[m.field] = m.floatvalue
 			}
 
 		}
@@ -690,6 +728,7 @@ func init() {
 			AllowedPendingMessages: defaultAllowPendingMessage,
 			DeleteCounters:         true,
 			DeleteGauges:           true,
+			DeleteMetrics:          true,
 			DeleteSets:             true,
 			DeleteTimings:          true,
 		}
